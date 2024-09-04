@@ -47,7 +47,7 @@ pip install -r requirements.txt
 2. Download the pretrained model [here](https://github.com/iflytek/MiniRBT).
 3. For one-time prediction, run the [LDA+ML.py](https://github.com/dtGaoP/accident_duration_predict/blob/master/LDA%2BML.py) to test the LDA+ML models. 
 Run the [LDA+LSTM+MLP](https://github.com/dtGaoP/accident_duration_predict/blob/master/LDA%2BLSTM%2BMLP.py) to test the LDA+LSTM+MLP model.
-Run the [MiniRBT+MLP](https://github.com/dtGaoP/accident_duration_predict/blob/master/MiniRBT%2BMLP.py) to test the MiniRBT+MLP model, and the [MiniRBT+MLP+text](https://github.com/dtGaoP/accident_duration_predict/MiniRBT_MLP_text.py) to test the MiniRBT+MLP model using only text. 
+Run the [MiniRBT+MLP](https://github.com/dtGaoP/accident_duration_predict/blob/master/MiniRBT%2BMLP.py) to test the MiniRBT+MLP model, and the [MiniRBT+MLP+text](https://github.com/dtGaoP/accident_duration_predict/blob/master/MiniRBT_MLP_text.py) to test the MiniRBT+MLP model using only text. 
 4. For sequential prediction, run the [MiniRBT_MLP_sequence.py](https://github.com/dtGaoP/accident_duration_predict/blob/master/MiniRBT_MLP_sequence.py) to test the sequencial prediction model.
 5. For the feature explanation, run the [LDA+ML.py](https://github.com/dtGaoP/accident_duration_predict/blob/master/LDA%2BML.py) to draw the beeswarm and the PDPs.
 6. For the textual feature evaluation, we implement it in a jupyter notebook, see [text_feature_explanation.ipynb](https://github.com/dtGaoP/accident_duration_predict/blob/master/text_feature_explanation.ipynb).
