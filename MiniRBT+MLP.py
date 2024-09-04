@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from chinese_calendar import is_workday  # 工作日判断
 import re  # 正则化
-from datetime import datetime
 import torch
 import torch.nn as nn
 
@@ -14,6 +13,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR  # 学习率调整策略
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error  # 评价指标
 from torch.utils.data import Dataset
+from datetime import datetime
+
+
 
 
 pd.set_option('display.max_columns', None)  # 显示全部列
@@ -95,7 +97,6 @@ accident_data = df_cleaned.drop(columns=['year', 'month', 'day', 'start_time', '
                                          'event_type', 'vehicle', 'accident_type', 'impact_location', 'impact',
                                          'death_num', 'injury_num', 'end_time', 'duration_h', 'duration_min',
                                          'description_early', 'description_early1', 'time', 'date', 'DateTime'])
-
 def remove_dates_from_texts(texts):
     # 删除日期
     date_pattern = r'\b\d{4}(?:年|\s)?(?:0?[1-9]|1[0-2])(?:月|\s)?(?:0?[1-9]|[12][0-9]|3[01])(?:日|\b)|\b(?:0?[1-9]|1[0-2])(?:月|\s)(?:0?[1-9]|[12][0-9]|3[01])日\b'
@@ -151,17 +152,17 @@ def process_text_with_times(text):
 
 accident_data['description'] = accident_data['description'].apply(remove_dates_from_texts)
 accident_data['description'] = accident_data['description'].apply(remove_1_from_texts)
-accident_data['description'] = accident_data['description'].apply(process_text_with_times)
+#accident_data['description'] = accident_data['description'].apply(process_text_with_times)
 
 
-##################################################
 categorical_columns = ['Weekday', 'Infrastructure_damage', 'Injury', 'Death', 'Vehicle_type', 'Vehicle_involved',
                       'Pavement_condition', 'Weather_condition', 'Shoulder', 'Burning', 'Rollover', 'Night_hours',
                       'Peak_hours', 'Ramp']
 #stats_summary = pd.DataFrame(columns=['Column', 'Count_0', 'Count_1', 'Mean_0', 'Std_0', 'Mean_1', 'Std_1'])
 
 duration = accident_data.pop('duration')
-
+#duration.to_csv("duration_data0.01.csv", index=False)
+# 划分训练集、验证集与测试集
 train_val_data, test_data, train_val_duration, test_duration = train_test_split(accident_data, duration, test_size=0.15, random_state=42, shuffle=True)
 train_data, val_data, train_duration, val_duration = train_test_split(train_val_data, train_val_duration, test_size=0.15, random_state=42, shuffle=True)
 
@@ -183,11 +184,18 @@ test_duration = test_duration_log
 # val_duration = val_duration_norm.squeeze()
 # test_duration = test_duration_norm.squeeze()
 
-# 提取文本数据做单独处理
 
+# 提取文本数据做单独处理
+# train_data_text = train_data["description_early1"]
+# val_data_text = val_data["description_early1"]
+# test_data_text = test_data["description_early1"]
 train_data_text = train_data.pop("description")
 val_data_text = val_data.pop("description")
 test_data_text = test_data.pop("description")
+# # 分类变量onehot编码
+# train_data_onehot = pd.get_dummies(train_data, columns=categorical_columns)  # shape: (n_samples, n_features),
+# val_data_onehot = pd.get_dummies(val_data, columns=categorical_columns)
+# test_data_onehot = pd.get_dummies(test_data, columns=categorical_columns)
 
 
 # 构建数据集类
@@ -226,11 +234,12 @@ tokenizer = BertTokenizer.from_pretrained('miniRBT')
 # 构造数据集
 train_dataset = AccidentsDataset(train_data_text, train_data, train_duration, tokenizer, max_length=256)
 val_dataset = AccidentsDataset(val_data_text, val_data, val_duration, tokenizer, max_length=256)
+test_dataset = AccidentsDataset(test_data_text, test_data, test_duration, tokenizer, max_length=256)
 
 batch_size = 16
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
-
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, drop_last=True)
 
 
 # 定义模型
@@ -250,6 +259,8 @@ class BertDurationRegressor(nn.Module):
         self.regression_layer = nn.Sequential(
             nn.Linear(dense_size + categorical_features_size, 64),
             nn.ReLU(),
+            #nn.Linear(64, 64),
+            #nn.ReLU(),
             nn.Dropout(dropout_rate),
             nn.Linear(64, out_features),
         )
@@ -322,119 +333,46 @@ model.to(device)
 #     train_losses.append(train_loss)
 #     val_losses.append(val_loss)
 #     scheduler.step()
-#     torch.save(model.state_dict(), 'MiniRBT_mlp_model_time_window_256_cls.pth')
+#     torch.save(model.state_dict(), 'MiniRBT_fullmsg_binary.pth')
 #     new_row = {'Epoch': epoch + 1, 'Train_Loss': train_loss, 'Val_Loss': val_loss}
-#     training_log = training_log.append(new_row, ignore_index=True)
-#     # if val_loss < best_val_loss:
-#     #     best_val_loss = val_loss
-#     #     torch.save(model.state_dict(), 'Bert_mlp_model.pth')
-#     #     no_improvement_count = 0
-#     # else:
-#     #     no_improvement_count += 1
-#     #     if no_improvement_count >= patience:
-#     #         print(f'Early stopping triggered at epoch {epoch}. No improvement in validation loss for {patience} epochs.')
-#     #         break
+#     #training_log = training_log.append(new_row, ignore_index=True)
+#     if val_loss < best_val_loss:
+#         best_val_loss = val_loss
+#         torch.save(model.state_dict(), 'MiniRBT_fullmsg_binary.pth')
+#         no_improvement_count = 0
+#     else:
+#         no_improvement_count += 1
+#         if no_improvement_count >= patience:
+#             print(f'Early stopping triggered at epoch {epoch}. No improvement in validation loss for {patience} epochs.')
+#             break
 #     print(f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+# training_log.to_csv('training_log_lognormal.csv', index=False)
+# print("Training log has been saved to 'training_log.csv'")
+# 绘制损失曲线
+# plt.figure(figsize=(10, 5))
+# plt.plot(train_losses, label='Training Loss')
+# plt.plot(val_losses, label='Validation Loss')
+# plt.title('Training and Validation Loss Over Epochs')
+# plt.xlabel('Epoch')
+# plt.ylabel('Loss')
+# plt.legend()
+# plt.show()
 
-class DynamicAccidentsDataset(AccidentsDataset):
-    def __init__(self, accident_descriptions, cat_data, durations, tokenizer, window_text=None, max_length=256):
-        super().__init__(accident_descriptions, cat_data, durations, tokenizer, max_length=max_length)
-        self.window_text = window_text  # 新增参数存储根据时间窗口提取的文本内容
-
-    def __getitem__(self, index):
-        if self.window_text is not None:
-            # 如果提供了窗口文本，则使用窗口文本，否则使用原始文本
-            accident_description = self.window_text[index] if isinstance(self.window_text, list) else self.window_text
-        else:
-            accident_description = self.accident_descriptions[index]
-
-        #cat_data = self.cat_data.iloc[index].values
-        cat_data = self.cat_data[index]  # 假设cat_data现在是一个列表
-        duration = self.durations[index]
-        inputs = self.tokenizer(accident_description, padding='max_length',
-                                truncation=True, max_length=self.max_length, return_tensors='pt')
-        cat_data = torch.tensor(cat_data)
-        target_duration = torch.tensor([duration], dtype=torch.float)
-
-        return {
-            'input_ids': inputs['input_ids'][0],
-            'attention_mask': inputs['attention_mask'][0],
-            'cat_data': cat_data,
-            'target_duration': target_duration
-        }
-
-
-class DynamicTestLoader:
-    def __init__(self, text_data, data, durations, tokenizer, batch_size=16, max_length=256):
-        self.text_data = text_data
-        self.data = data
-        self.durations = durations
-        self.tokenizer = tokenizer
-        self.batch_size = batch_size
-        self.max_length = max_length
-        self.time_windows = list(range(0, 191, 1))  # 从0到190，步长为10
-
-    def extract_text_for_window(self, window_min, text_sample):
-        """根据时间窗口提取单个样本的文本"""
-        pattern = r'(\d+(\.\d+)?min)'  # 正则表达式保持不变
-        regex = re.compile(pattern)
-        extracted_text = ""  # 初始化累积的文本
-        start_pos = 0  # 起始搜索位置
-        #found_beyond_window = False  # 标记是否遇到超过window_min的时间戳
-        all_timestamps_below_window = True
-
-        while start_pos < len(text_sample):
-            match = regex.search(text_sample[start_pos:], re.IGNORECASE)
-            if not match:  # 如果没有更多匹配，跳出循环
-                extracted_text += text_sample[start_pos:]
-                break
-
-            time_str = match.group()
-            time_value = float(time_str[:-3])
-            if time_value >= window_min:  # 当找到的时间戳大于等于window_min时
-                #found_beyond_window = True
-                all_timestamps_below_window = False
-                # 将当前时间戳及其之前的文本添加到累积的extracted_text中
-                extracted_text += text_sample[start_pos:match.start()]
-                #start_pos += match.start()
-                break  # 停止搜索，因为我们找到了超过窗口限制的时间
-            extracted_text += text_sample[start_pos:match.end()]
-            start_pos += match.end()
-            # else:  # 如果时间戳仍在窗口内
-            #     # 将此时间戳及其之前的文本添加到累积的extracted_text中
-            #     extracted_text += text_sample[start_pos:match.end()]
-            #     start_pos += match.end()  # 更新起始搜索位置到当前匹配的末尾
-        if all_timestamps_below_window:
-            return text_sample
-        else:
-            return extracted_text
-
-
-
-    def __iter__(self):
-        print("Time Windows:", self.time_windows)  # 确认time_windows内容
-        all_samples = [
-            (text, data_series, duration)
-            for text, (index, data_series), duration in zip(
-                self.text_data, self.data.iterrows(), self.durations
-            )
-        ] # 假设data和durations也是Series，需要与text_data对应
-        for window_min in self.time_windows:
-            # 为当前时间窗口创建一个新的数据集，包含所有样本在该窗口内的文本
-            window_texts, window_datas, window_durations = [], [], []
-            for text_sample, data_sample, duration_sample in all_samples:
-                extracted_text = self.extract_text_for_window(window_min, str(text_sample))
-                window_texts.append(extracted_text)
-                window_datas.append(data_sample)
-                window_durations.append(duration_sample)
-
-            test_dataset = DynamicAccidentsDataset(window_texts, window_datas, window_durations, self.tokenizer,
-                                                   max_length=self.max_length)
-
-            test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, drop_last=True)
-            yield test_loader, window_min
-
-
+#加载最佳模型权重
+print('----------loading model---------------')
+model.load_state_dict(torch.load('MiniRBT_fullmsg_binary.pth'))
+model.eval()
+test_preds = []
+test_labels = []
+with torch.no_grad():
+    for batch in test_loader:
+        inputs = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        categorical_features = batch['cat_data'].to(device)
+        targets = batch['target_duration'].to(device)
+        outputs = model(inputs, attention_mask, categorical_features)
+        test_preds.extend(outputs.cpu().detach().numpy())
+        test_labels.extend(targets.cpu().detach().numpy())
 
 
 def calculate_metrics(predictions, targets):
@@ -443,51 +381,51 @@ def calculate_metrics(predictions, targets):
     mape = np.mean(np.abs((targets - predictions) / targets)) * 100  # 注意处理除零的情况
     return rmse, mae, mape
 
-#加载最佳模型权重
-print('----------loading model---------------')
-model.load_state_dict(torch.load('MiniRBT_mlp_model_time_window_256_cls.pth'))
-model.eval()
-test_preds = []
-test_labels = []
-dynamic_loader = DynamicTestLoader(test_data_text, test_data, test_duration, tokenizer, batch_size=batch_size, max_length=256)
-results_df = pd.DataFrame(columns=['Window', 'RMSE', 'MAE', 'MAPE'])
-for test_loader, window_min in dynamic_loader:
-    test_preds_window = []  # 用于存储当前窗口的所有预测值
-    test_labels_window = []
-    with torch.no_grad():
-        for batch in test_loader:
-            inputs = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            categorical_features = batch['cat_data'].to(device)
-            targets = batch['target_duration'].to(device)
-            outputs = model(inputs, attention_mask, categorical_features)
-            test_preds_window.extend(outputs.cpu().detach().numpy())
-            test_labels_window.extend(targets.cpu().detach().numpy())
-    test_preds = np.concatenate(test_preds_window, axis=0)  # 将列表转换为单个NumPy数组
-    test_labels = np.concatenate(test_labels_window, axis=0)
-    predictions_original_scale = np.exp(test_preds)
-    actuals_original_scale = np.exp(test_labels)
-    # predictions_original_scale = scaler.inverse_transform(test_preds.reshape(-1, 1))
-    # actuals_original_scale = scaler.inverse_transform(test_labels.reshape(-1, 1))
 
+# 转换为NumPy数组
+# test_preds = np.array(outputs)
+# test_labels = np.array(test_labels)
+test_preds = np.concatenate(test_preds, axis=0)  # 将列表转换为单个NumPy数组
+test_labels = np.concatenate(test_labels, axis=0)
+predictions_original_scale = np.exp(test_preds)
+actuals_original_scale = np.exp(test_labels)
+# predictions_original_scale = scaler.inverse_transform(test_preds.reshape(-1, 1))
+# actuals_original_scale = scaler.inverse_transform(test_labels.reshape(-1, 1))
 
-    rmse, mae, mape = calculate_metrics(predictions_original_scale, actuals_original_scale)
-    print(f"Window {window_min} Metrics - RMSE: {rmse}, MAE: {mae}, MAPE: {mape}%")
+# 计算指标
+rmse, mae, mape = calculate_metrics(predictions_original_scale, actuals_original_scale)
+print(f"Test Set Metrics: RMSE = {rmse:.4f}, MAE = {mae:.4f}, MAPE = {mape:.4f}%")
 #
-# #     if window_min in [30, 90, 180]:
-# #         df = pd.DataFrame({
-# #             'Predictions': predictions_original_scale.flatten(),  # 展平数组作为列
-# #             'Actuals': actuals_original_scale.flatten()
-# #         })
-# #         csv_file_path = f'predictions_vs_actuals_{window_min}.csv'
-# #         df.to_csv(csv_file_path, index=False)  # index=False 可以避免保存索引列
-# #         print(f'{window_min}窗口保存成功')
-# #
-# #
-# #     results_df = results_df.append({'Window': window_min, 'RMSE': rmse, 'MAE': mae, 'MAPE': mape}, ignore_index=True)
-# # results_df.to_csv('window_metrics_cls.csv', index=False)
-# # print("Metrics saved to window_metrics.csv")
+# df = pd.DataFrame({
+#     'Predictions': predictions_original_scale.flatten(),  # 展平数组作为列
+#     'Actuals': actuals_original_scale.flatten()
+# })
+#
+# # 指定保存的文件名和路径
+# csv_file_path = 'predictions_vs_actuals_initial.csv'
+#
+# # 将 DataFrame 写入 CSV 文件
+# df.to_csv(csv_file_path, index=False)  # index=False 可以避免保存索引列
+#
+time_intervals = [(0,30), (30, 60), (60, 90), (90, 120), (120, 150), (150, 185)]
+interval_results = []
+for interval in time_intervals:
+    interval_mask = (actuals_original_scale >= interval[0]) & (actuals_original_scale <= interval[1])
+    interval_preds = predictions_original_scale[interval_mask]
+    interval_actuals = actuals_original_scale[interval_mask]
 
+    if not interval_preds.size or not interval_actuals.size:
+        print(f"No data in the interval {interval[0]}-{interval[1]} minutes.")
+        continue
 
+    rmse, mae, mape = calculate_metrics(interval_preds, interval_actuals)
+    interval_results.append({
+        "Interval": f"{interval[0]}-{interval[1]} min",
+        "RMSE": rmse,
+        "MAE": mae,
+        "MAPE": mape
+    })
 
-
+# 创建DataFrame并保存到CSV文件
+df = pd.DataFrame(interval_results)
+df.to_csv("group_metrics/MiniRBT+MLP_group_metrics.csv", index=False)

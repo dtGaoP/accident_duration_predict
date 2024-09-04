@@ -7,19 +7,15 @@ import re  # 正则化
 import os  # 读取文件
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 from sklearn.model_selection import train_test_split  # 划分数据集
 from sklearn.preprocessing import MinMaxScaler  # 归一化处理
-from gensim.models import Word2Vec  # 词嵌入
-from gensim.models.word2vec import LineSentence
 from transformers import BertTokenizer, BertModel
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR  # 学习率调整策略
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error  # 评价指标
-import random
 from torch.utils.data import Dataset
+from datetime import datetime
 
 
 
@@ -102,48 +98,65 @@ df_cleaned['Ramp'] = (df_cleaned['location_type'].str.contains('D')).astype(int)
 accident_data = df_cleaned.drop(columns=['year', 'month', 'day', 'start_time', 'location_type', 'weather', 'direction', 'environment_condition',
                                          'event_type', 'vehicle', 'accident_type', 'impact_location', 'impact',
                                          'death_num', 'injury_num', 'end_time', 'duration_h', 'duration_min',
-                                         'description_early', 'description', 'time', 'date', 'DateTime'])
+                                         'description_early', 'description_early1', 'time', 'date', 'DateTime'])
+def remove_dates_from_texts(texts):
+    # 删除日期
+    date_pattern = r'\b\d{4}(?:年|\s)?(?:0?[1-9]|1[0-2])(?:月|\s)?(?:0?[1-9]|[12][0-9]|3[01])(?:日|\b)|\b(?:0?[1-9]|1[0-2])(?:月|\s)(?:0?[1-9]|[12][0-9]|3[01])日\b'
+    return re.sub(date_pattern, '', texts).strip()
 
-# description preprocess (text)
-# 加载自定义词典
-dict_folder = 'dict/'
-# 遍历文件夹中的所有文件
-for filename in os.listdir(dict_folder):
-    if filename.endswith('.txt'):  # 确保只加载.txt文件
-        dict_path = os.path.join(dict_folder, filename)
-        jieba.load_userdict(dict_path)  # 加载每个词典文件
+def remove_1_from_texts(texts):
+    # 匹配 '- 10:20', '-10:20', ' 10:20', '10:20' 等形式
+    time_split_pattern = r'(-\s*(\d{1,2}:\d{2}|\d{1,2}\.\d{2}))'  # 匹配时间范围的后半部分  # 匹配时间范围的后半部分及之后的任何内容
+    return re.sub(time_split_pattern, '', texts).strip()
 
-# 加载停用词列表
-with open('stopwords.txt', 'r', encoding='utf-8') as f:
-    stopwords = set(f.read().splitlines())
-# 去除车牌号
-license_plate_pattern = re.compile(r'[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领A-Z]{1}[A-Z]{1}[A-Z0-9]{4,5}[A-Z0-9挂学警港澳]{1}')
+def process_text_with_times(text):
+    # 使用正则表达式提取所有的时间信息
+    pattern = r'(\d+:\d+)'
+    matches = re.findall(pattern, text)
 
-def clean_chinese_text(text):
-    # text = text.replace('至', '')  # 删除“至”
-    # text = text.replace('接', '')  # 删除“接”
-    # text = text.replace('及', '')  # 删除“及”
-    text_without_to = text.replace('冀', '')  # 删除“冀”
-    text_without_license = license_plate_pattern.sub('', text_without_to)  # 删除车牌
-    #text_without_numbers_and_letters = re.sub(r'[^\u4e00-\u9fa5]', '', text_without_license)  # 删除桩号
+    if not matches:
+        return text
 
-    tokens = jieba.lcut(text_without_license, cut_all=False)  # 分词
+    try:
+        # 转换时间
+        times = [datetime.strptime(match, '%H:%M') for match in matches]
+        base_time = times[0]
 
-    # 去除停用词
-    #tokens = [token for token in tokens if token not in stopwords]
+        # 计算与第一个时间的分钟差，同时处理跨天情况
+        time_differences = []
+        for time in times:
+            raw_diff = (time - base_time).total_seconds() // 60
+            # 处理跨天情况
+            if raw_diff < 0:
+                # 计算从24:00到base_time，再从24:00到当前时间的总分钟数
+                minutes_to_midnight = (24 * 60) - (base_time.hour * 60 + base_time.minute)
+                # 从00:00到time的分钟数
+                minutes_from_midnight = time.hour * 60 + time.minute
+                diff = minutes_to_midnight + minutes_from_midnight
+            else:
+                diff = raw_diff
+            time_differences.append(diff)
 
-    return " ".join(tokens)
+        # 构建替换逻辑，第一个时间映射为'0min'，其余时间为与第一个时间的分钟差
+        replacements = {match: (f"{diff}min" if i > 0 else "0min") for i, (match, diff) in
+                        enumerate(zip(matches, time_differences))}
+
+    except ValueError as e:
+        print(f"Error processing time: {e}")
+        return text
+
+    # 这里省略了文本替换逻辑的具体实现，因为直接在原始代码上修改并添加跨天处理是主要目的
+    for match, replacement in replacements.items():
+        text = re.sub(re.escape(match), replacement, text, count=1)
+
+    return text
 
 
-#accident_data['description_early1'] = accident_data['description_early1'].apply(clean_chinese_text)
+accident_data['description'] = accident_data['description'].apply(remove_dates_from_texts)
+accident_data['description'] = accident_data['description'].apply(remove_1_from_texts)
+#accident_data['description'] = accident_data['description'].apply(process_text_with_times)
 
-# with open('all_sentences.txt', 'w', encoding='utf-8') as f:
-#     for item in accident_data['description_early1']:
-#         f.write(item + '\n')
 
-with open('all_sentences.txt', 'w', encoding='utf-8') as f:
-    for item in accident_data['description_early1']:
-        f.write(item + '\n')
 ##################################################
 categorical_columns = ['Weekday', 'Infrastructure_damage', 'Injury', 'Death', 'Vehicle_type', 'Vehicle_involved',
                       'Pavement_condition', 'Weather_condition', 'Shoulder', 'Burning', 'Rollover', 'Night_hours',
@@ -158,34 +171,27 @@ train_data, val_data, train_duration, val_duration = train_test_split(train_val_
 
 #对标签进行对数变换，使其近似正态分布
 
-# train_duration_log = np.log(train_duration.values)
-# val_duration_log = np.log(val_duration.values)
-# test_duration_log = np.log(test_duration.values)
-# train_duration = train_duration_log
-# val_duration = val_duration_log
-# test_duration = test_duration_log
+train_duration_log = np.log(train_duration.values)
+val_duration_log = np.log(val_duration.values)
+test_duration_log = np.log(test_duration.values)
+train_duration = train_duration_log
+val_duration = val_duration_log
+test_duration = test_duration_log
 
-
-scaler = MinMaxScaler()
-train_duration_norm = scaler.fit_transform(train_duration.values.reshape(-1, 1))
-val_duration_norm = scaler.transform(val_duration.values.reshape(-1, 1))
-test_duration_norm = scaler.transform(test_duration.values.reshape(-1, 1))
-train_duration = train_duration_norm.squeeze()
-val_duration = val_duration_norm.squeeze()
-test_duration = test_duration_norm.squeeze()
+#归一化
+# scaler = MinMaxScaler()
+# train_duration_norm = scaler.fit_transform(train_duration.values.reshape(-1, 1))
+# val_duration_norm = scaler.transform(val_duration.values.reshape(-1, 1))
+# test_duration_norm = scaler.transform(test_duration.values.reshape(-1, 1))
+# train_duration = train_duration_norm.squeeze()
+# val_duration = val_duration_norm.squeeze()
+# test_duration = test_duration_norm.squeeze()
 
 
 # 提取文本数据做单独处理
-# train_data_text = train_data["description_early1"]
-# val_data_text = val_data["description_early1"]
-# test_data_text = test_data["description_early1"]
-train_data_text = train_data.pop("description_early1")
-val_data_text = val_data.pop("description_early1")
-test_data_text = test_data.pop("description_early1")
-# # 分类变量onehot编码
-# train_data_onehot = pd.get_dummies(train_data, columns=categorical_columns)  # shape: (n_samples, n_features),
-# val_data_onehot = pd.get_dummies(val_data, columns=categorical_columns)
-# test_data_onehot = pd.get_dummies(test_data, columns=categorical_columns)
+train_data_text = train_data.pop("description")
+val_data_text = val_data.pop("description")
+test_data_text = test_data.pop("description")
 
 
 # 构建数据集类
@@ -222,9 +228,9 @@ assert len(train_data_text) == len(train_data) == len(train_duration), "The leng
 tokenizer = BertTokenizer.from_pretrained('miniRBT')
 
 # 构造数据集
-train_dataset = AccidentsDataset(train_data_text, train_duration, tokenizer, max_length=128)
-val_dataset = AccidentsDataset(val_data_text, val_duration, tokenizer, max_length=128)
-test_dataset = AccidentsDataset(test_data_text, test_duration, tokenizer, max_length=128)
+train_dataset = AccidentsDataset(train_data_text, train_duration, tokenizer, max_length=256)
+val_dataset = AccidentsDataset(val_data_text, val_duration, tokenizer, max_length=256)
+test_dataset = AccidentsDataset(test_data_text, test_duration, tokenizer, max_length=256)
 
 batch_size = 16
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -256,9 +262,10 @@ class BertDurationRegressor(nn.Module):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_sequence = outputs.last_hidden_state.mean(dim=1)
-        pooled_sequence = self.dropout(pooled_sequence)
-        text_features = torch.relu(self.fc1(pooled_sequence))
+        #pooled_sequence = outputs.last_hidden_state.mean(dim=1)
+        #pooled_sequence = self.dropout(pooled_sequence)
+        cls_token_output = outputs.last_hidden_state[:, 0, :]
+        text_features = torch.relu(self.fc1(cls_token_output))
         #combined_features = torch.cat((text_features, categorical_features), dim=1)
         out = self.regression_layer(text_features)
         return out
@@ -269,79 +276,79 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = BertDurationRegressor(train_data.shape[1])
 model.to(device)
 
-# 定义损失函数和优化器
-criterion = nn.MSELoss()
-lr = 0.0002
-optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-#optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
-epochs = 20
-patience = 5  # 早停epoch设置
-no_improvement_count = 0
-scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-
-def train_epoch(model, data_loader, optimizer, criterion):
-    model.train()
-    total_loss = 0.0
-    for batch in data_loader:
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        targets = batch['target_duration'].to(device)
-        outputs = model(input_ids, attention_mask)
-        loss = criterion(outputs, targets)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * input_ids.size(0)
-    return total_loss / len(data_loader.dataset)
-def val_epoch(model, data_loader, criterion):
-    model.eval()
-    total_loss = 0.0
-    with torch.no_grad():
-        for batch in data_loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            targets = batch['target_duration'].to(device)  #
-            outputs = model(input_ids, attention_mask)
-            loss = criterion(outputs, targets)
-            total_loss += loss.item() * input_ids.size(0)
-    return total_loss / len(data_loader.dataset)
-best_val_loss = float('inf')
-train_losses = []
-val_losses = []
-
-columns = ['Epoch', 'Train_Loss', 'Val_Loss']
-training_log = pd.DataFrame(columns=columns)
-
-for epoch in range(epochs):
-    train_loss = train_epoch(model, train_loader, optimizer, criterion)
-    val_loss = val_epoch(model, val_loader, criterion)
-    train_losses.append(train_loss)
-    val_losses.append(val_loss)
-    scheduler.step()
-    torch.save(model.state_dict(), 'MiniRBT_20epoch_text.pth')
-    new_row = {'Epoch': epoch + 1, 'Train_Loss': train_loss, 'Val_Loss': val_loss}
-    training_log = training_log.append(new_row, ignore_index=True)
-    # if val_loss < best_val_loss:
-    #     best_val_loss = val_loss
-    #     torch.save(model.state_dict(), 'Bert_mlp_model.pth')
-    #     no_improvement_count = 0
-    # else:
-    #     no_improvement_count += 1
-    #     if no_improvement_count >= patience:
-    #         print(f'Early stopping triggered at epoch {epoch}. No improvement in validation loss for {patience} epochs.')
-    #         break
-    print(f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
-training_log.to_csv('training_log_lognormal.csv', index=False)
-print("Training log has been saved to 'training_log.csv'")
+# # 定义损失函数和优化器
+# criterion = nn.MSELoss()
+# lr = 0.0002
+# optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+# #optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
+# epochs = 20
+# patience = 5  # 早停epoch设置
+# no_improvement_count = 0
+# scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+#
+# def train_epoch(model, data_loader, optimizer, criterion):
+#     model.train()
+#     total_loss = 0.0
+#     for batch in data_loader:
+#         input_ids = batch['input_ids'].to(device)
+#         attention_mask = batch['attention_mask'].to(device)
+#         targets = batch['target_duration'].to(device)
+#         outputs = model(input_ids, attention_mask)
+#         loss = criterion(outputs, targets)
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+#         total_loss += loss.item() * input_ids.size(0)
+#     return total_loss / len(data_loader.dataset)
+# def val_epoch(model, data_loader, criterion):
+#     model.eval()
+#     total_loss = 0.0
+#     with torch.no_grad():
+#         for batch in data_loader:
+#             input_ids = batch['input_ids'].to(device)
+#             attention_mask = batch['attention_mask'].to(device)
+#             targets = batch['target_duration'].to(device)  #
+#             outputs = model(input_ids, attention_mask)
+#             loss = criterion(outputs, targets)
+#             total_loss += loss.item() * input_ids.size(0)
+#     return total_loss / len(data_loader.dataset)
+# best_val_loss = float('inf')
+# train_losses = []
+# val_losses = []
+#
+# columns = ['Epoch', 'Train_Loss', 'Val_Loss']
+# training_log = pd.DataFrame(columns=columns)
+#
+# for epoch in range(epochs):
+#     train_loss = train_epoch(model, train_loader, optimizer, criterion)
+#     val_loss = val_epoch(model, val_loader, criterion)
+#     train_losses.append(train_loss)
+#     val_losses.append(val_loss)
+#     scheduler.step()
+#     torch.save(model.state_dict(), 'MiniRBT_initialmsg.pth')
+#     new_row = {'Epoch': epoch + 1, 'Train_Loss': train_loss, 'Val_Loss': val_loss}
+#     training_log = training_log.append(new_row, ignore_index=True)
+#     if val_loss < best_val_loss:
+#         best_val_loss = val_loss
+#         torch.save(model.state_dict(), 'MiniRBT_initialmsg.pth')
+#         no_improvement_count = 0
+#     else:
+#         no_improvement_count += 1
+#         if no_improvement_count >= patience:
+#             print(f'Early stopping triggered at epoch {epoch}. No improvement in validation loss for {patience} epochs.')
+#             break
+#     print(f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+# training_log.to_csv('training_log_lognormal.csv', index=False)
+# print("Training log has been saved to 'training_log.csv'")
 
 #加载最佳模型权重
 print('----------loading model---------------')
-model.load_state_dict(torch.load('MiniRBT_20epoch_text.pth'))
+model.load_state_dict(torch.load('MiniRBT_fullmsg.pth'))
 model.eval()
 test_preds = []
 test_labels = []
 with torch.no_grad():
-    for batch in test_loader:
+    for batch in train_loader:
         inputs = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
         targets = batch['target_duration'].to(device)
@@ -362,10 +369,10 @@ def calculate_metrics(predictions, targets):
 # test_labels = np.array(test_labels)
 test_preds = np.concatenate(test_preds, axis=0)  # 将列表转换为单个NumPy数组
 test_labels = np.concatenate(test_labels, axis=0)
-# predictions_original_scale = np.exp(test_preds)
-# actuals_original_scale = np.exp(test_labels)
-predictions_original_scale = scaler.inverse_transform(test_preds.reshape(-1, 1))
-actuals_original_scale = scaler.inverse_transform(test_labels.reshape(-1, 1))
+predictions_original_scale = np.exp(test_preds)
+actuals_original_scale = np.exp(test_labels)
+# predictions_original_scale = scaler.inverse_transform(test_preds.reshape(-1, 1))
+# actuals_original_scale = scaler.inverse_transform(test_labels.reshape(-1, 1))
 
 # 计算指标
 rmse, mae, mape = calculate_metrics(predictions_original_scale, actuals_original_scale)
